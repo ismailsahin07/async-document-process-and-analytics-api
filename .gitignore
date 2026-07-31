@@ -3,6 +3,9 @@
 ##
 ## Get latest from `dotnet new gitignore`
 
+# Azure Functions localsettings file
+local.settings.json
+
 # dotenv files
 .env
 
