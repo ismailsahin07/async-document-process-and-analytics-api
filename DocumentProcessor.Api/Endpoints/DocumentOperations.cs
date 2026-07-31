@@ -172,7 +172,7 @@ public class DocumentOperations
 
     [Function(nameof(DownloadDocument))]
     public async Task<IActionResult> DownloadDocument(
-        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "documents/{id]/download")] HttpRequest req, string id)
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "documents/{id}/download")] HttpRequest req, string id)
     {
         var user = req.HttpContext.User;
         string? userId = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("oid");
@@ -184,24 +184,21 @@ public class DocumentOperations
         {
             BlobClient blobClient = _blobContainerClient.GetBlobClient(id);
 
-            var options = new BlobGetUserDelegationKeyOptions(DateTimeOffset.UtcNow.AddMinutes(5));
+            var options = new BlobGetUserDelegationKeyOptions(DateTimeOffset.UtcNow.AddMinutes(5)) 
+            { StartsOn = DateTimeOffset.UtcNow.AddMinutes(-2) };
             UserDelegationKey key =  await _blobServiceClient.GetUserDelegationKeyAsync(options);
 
             var permission = BlobSasPermissions.Read;
             var expirationTime = DateTimeOffset.UtcNow.AddMinutes(5);
-
             Uri sasUri = blobClient.GenerateUserDelegationSasUri(permission, expirationTime, key);
 
-            BlobClient sasBlobClient = new BlobClient(sasUri);
-
-            Azure.Response<BlobDownloadResult> result =  await sasBlobClient.DownloadContentAsync();
-
-            _logger.LogInformation($"Successfully downloaded blob: {blobClient.Name}");
-            return new OkObjectResult(result.Value);
+            _logger.LogInformation($"Successfully generated the SAS URI for blob: {blobClient.Name}");
+            return new OkObjectResult(new { DownloadUri = sasUri.ToString() });
         }
         catch(Exception ex)
         {
-
+            _logger.LogError($"Cryptographic SAS generation pipeline failure: {ex.Message}");
+            return new StatusCodeResult(StatusCodes.Status500InternalServerError);
         }
     }
 }
