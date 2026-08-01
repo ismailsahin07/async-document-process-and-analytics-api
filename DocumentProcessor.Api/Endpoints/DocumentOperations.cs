@@ -5,6 +5,7 @@ using Azure.Storage.Blobs.Specialized;
 using Azure.Storage.Sas;
 using DocumentProcessor.Core.Enums;
 using DocumentProcessor.Core.Models;
+using Microsoft.AspNetCore.Components.Endpoints;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Cosmos;
@@ -13,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Net;
 using System.Security.Claims;
+using System.Text.Json;
 
 namespace DocumentProcessor.Api.Endpoints;
 
@@ -40,7 +42,7 @@ public class DocumentOperations
     [Function(nameof(PostDocument))]
     public async Task<IActionResult> PostDocument([HttpTrigger(AuthorizationLevel.Anonymous, "post", "documents")] HttpRequest req)
     {
-        _logger.LogInformation("Processing a document saving request...");
+        _logger.LogInformation("Processing a CosmosDB document saving request...");
         
         var user = req.HttpContext.User;
         string? userId = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("oid");
@@ -48,33 +50,30 @@ public class DocumentOperations
         if (string.IsNullOrEmpty(userId))
             return new UnauthorizedResult();
 
-        if (!req.HasFormContentType)
-            return new BadRequestObjectResult("Request must be multipart/form-data");
+        using JsonDocument doc = JsonDocument.Parse(req.Body);
+        var root = doc.RootElement;
 
-        var form = await req.ReadFormAsync();
-        var file = form.Files.GetFile("documentFile");
-
-        if (file is null || file.Length is 0)
-            return new BadRequestObjectResult("File is missing.");
+        if (!root.TryGetProperty("documentName", out JsonElement nameElement) || 
+            !root.TryGetProperty("fileType", out JsonElement fileTypeElement))
+            return new BadRequestObjectResult("One or more properties are missing from the incoming JSON");
 
         var document = new DocumentModel
         {
             Id = $"{userId}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}",
             UserId = userId,
-            Name = form.TryGetValue("documentName", out var nameValue) ? nameValue.ToString() : file.FileName,
+            Name = nameElement.GetString(),
             TimeStamp = DateTimeOffset.UtcNow,
-            FileType = Path.GetExtension(file.ContentType),
-            Status = StatusTypes.Pending
+            FileType = fileTypeElement.GetString(),
+            Status = StatusTypes.PendingUpload
         };
 
         try
         {
-            using var stream = file.OpenReadStream();
-            string blobName = document.Id;
+            var options = new BlobGetUserDelegationKeyOptions(DateTimeOffset.UtcNow.AddMinutes(5));
+            _blobServiceClient.GetUserDelegationKeyAsync(,)
 
-            BlobClient blobClient = _blobContainerClient.GetBlobClient(blobName);
-            await blobClient.UploadAsync(stream);
-            _logger.LogInformation($"blob {blobName} is successfully uploaded to {_blobContainerClient.Name} container.");
+            BlobClient blobClient = _blobContainerClient.GetBlobClient(userId);
+            blobClient.GenerateUserDelegationSasUri(BlobSasPermissions.Read, DateTimeOffset.UtcNow.AddMinutes(5), )
 
             ItemResponse<DocumentModel> response = await _container.CreateItemAsync(
                 item: document,
