@@ -6,5 +6,5 @@ public enum StatusTypes
     Processing,
     Completed,
     Failed,
-    PendingUpload
+    UploadPending
 }

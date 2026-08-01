@@ -1,11 +1,8 @@
-using Azure;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
-using Azure.Storage.Blobs.Specialized;
 using Azure.Storage.Sas;
 using DocumentProcessor.Core.Enums;
 using DocumentProcessor.Core.Models;
-using Microsoft.AspNetCore.Components.Endpoints;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Cosmos;
@@ -22,19 +19,17 @@ public class DocumentOperations
 {
     private readonly ILogger<DocumentOperations> _logger;
     private readonly Container _container;
-    private readonly CosmosClient _cosmosClient;
     private readonly BlobContainerClient _blobContainerClient;
     private readonly BlobServiceClient _blobServiceClient;
 
     public DocumentOperations(
         ILogger<DocumentOperations> logger,
+        [FromKeyedServices(CosmosContainerKey.Documents)] Container container,
         [FromKeyedServices(BlobContainerKey.docs)] BlobContainerClient blobContainerClient,
         BlobServiceClient blobServiceClient)
     {
         _logger = logger;
-        _container = _cosmosClient.GetContainer(
-            CosmosDatabaseKey.AsyncDocProcessor.ToString(), 
-            CosmosContainerKey.Documents.ToString());
+        _container = container;
         _blobContainerClient = blobContainerClient;
         _blobServiceClient = blobServiceClient;
     }
@@ -50,7 +45,7 @@ public class DocumentOperations
         if (string.IsNullOrEmpty(userId))
             return new UnauthorizedResult();
 
-        using JsonDocument doc = JsonDocument.Parse(req.Body);
+        using JsonDocument doc = await JsonDocument.ParseAsync(req.Body);
         var root = doc.RootElement;
 
         if (!root.TryGetProperty("documentName", out JsonElement nameElement) || 
@@ -64,23 +59,33 @@ public class DocumentOperations
             Name = nameElement.GetString(),
             TimeStamp = DateTimeOffset.UtcNow,
             FileType = fileTypeElement.GetString(),
-            Status = StatusTypes.PendingUpload
+            Status = StatusTypes.UploadPending
         };
 
         try
         {
-            var options = new BlobGetUserDelegationKeyOptions(DateTimeOffset.UtcNow.AddMinutes(5));
-            _blobServiceClient.GetUserDelegationKeyAsync(,)
+            var options = new BlobGetUserDelegationKeyOptions(DateTimeOffset.UtcNow.AddMinutes(5))
+            { StartsOn =  DateTimeOffset.UtcNow.AddMinutes(-2) };
+            var key = await _blobServiceClient.GetUserDelegationKeyAsync(options);
 
-            BlobClient blobClient = _blobContainerClient.GetBlobClient(userId);
-            blobClient.GenerateUserDelegationSasUri(BlobSasPermissions.Read, DateTimeOffset.UtcNow.AddMinutes(5), )
+            var permissions = BlobSasPermissions.Create | BlobSasPermissions.Write;
+            var expireTime = DateTimeOffset.UtcNow.AddMinutes(5);
+
+            BlobClient blobClient = _blobContainerClient.GetBlobClient(document.Id);
+            Uri sasUri = blobClient.GenerateUserDelegationSasUri(permissions, expireTime, key);
+
+            _logger.LogInformation($"Successfully generated a blob SAS Uri for upload.");
 
             ItemResponse<DocumentModel> response = await _container.CreateItemAsync(
                 item: document,
                 partitionKey: new PartitionKey(userId));
             
             _logger.LogInformation($"Document has successfully saved to the database. Request Charge: {response.RequestCharge} RUs.");
-            return new AcceptedResult("/api/documents", new { DocumentId = document.Id });
+            return new AcceptedResult("/api/documents", new 
+            { 
+                DocumentId = document.Id , 
+                UploadUrl = sasUri.ToString()
+            });
         }
         catch(CosmosException ex)
         {
