@@ -7,6 +7,7 @@ using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Net;
 using System.Text.Json;
 
 namespace DocumentProcessor.Api.Triggers;
@@ -19,7 +20,6 @@ public class StatusChangeTrigger
 
     public StatusChangeTrigger(
         ILogger<StatusChangeTrigger> logger,
-        CosmosClient cosmosClient,
         [FromKeyedServices(CosmosContainerKey.Documents)] Container container,
         [FromKeyedServices(BlobContainerKey.docs)] BlobContainerClient blobContainerClient)
     {
@@ -67,17 +67,33 @@ public class StatusChangeTrigger
 
         try
         {
-            ItemResponse<DocumentModel> documentResponse = await _container.ReadItemAsync<DocumentModel>(
+            List<PatchOperation> patchOperations = new()
+            {
+                PatchOperation.Replace("/status", StatusTypes.Processing)
+            };
+
+            PatchItemRequestOptions requestOptions = new()
+            {
+                FilterPredicate = "FROM c WHERE c.status = 'UploadPending'"
+            };
+
+            ItemResponse<DocumentModel> statusResponse = await _container.PatchItemAsync<DocumentModel>(
                 id: blobName,
-                partitionKey: new PartitionKey(userId));
+                partitionKey: new PartitionKey(userId),
+                patchOperations,
+                requestOptions);
 
-            var document = documentResponse.Resource;
-
-            ItemResponse<DocumentModel> statusResponse = 
+            _logger.LogInformation($"Document {blobName} is successfully patched. Request Charge: {statusResponse.RequestCharge} RUs.");
         }
-        catch(Exception ex)
+        catch(CosmosException ex) when (ex.StatusCode is HttpStatusCode.NotFound)
         {
-
+            _logger.LogError($"Blob: {blobName} wasn't in the 'UploadPending' state.");
+            return;
+        }
+        catch(CosmosException ex)
+        {
+            _logger.LogError($"CosmosDB patch operation failed: {ex.Message}");
+            return;
         }
     }
 
