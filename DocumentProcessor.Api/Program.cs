@@ -1,4 +1,5 @@
 using Azure.Identity;
+using Azure.Messaging.ServiceBus;
 using Azure.Storage.Blobs;
 using DocumentProcessor.Core.Enums;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -8,9 +9,6 @@ using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Identity.Web;
-using Polly;
-using Polly.Retry;
-using System.Net;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 
@@ -54,16 +52,12 @@ builder.Services.AddKeyedSingleton<Container>(CosmosContainerKey.Documents, (sp,
     return cosmosClient.GetContainer(databaseName, containerName);
 });
 
-builder.Services.AddResiliencePipeline("CosmosRetryPipeline", builder =>
+builder.Services.AddSingleton<ServiceBusClient>(sp =>
 {
-    builder.AddRetry(new RetryStrategyOptions()
-    {
-        ShouldHandle = new PredicateBuilder().Handle<CosmosException>(ex => 
-            ex.StatusCode == HttpStatusCode.PreconditionFailed),
-        MaxRetryAttempts = 3,
-        Delay = TimeSpan.FromMilliseconds(200),
-        BackoffType = DelayBackoffType.Exponential
-    });
+    string sbEndpoint = Environment.GetEnvironmentVariable("ServiceBusAccount__fullyQualifiedNamespace")
+        ?? throw new InvalidOperationException("Service Bus endpoint is missing.");
+
+    return new ServiceBusClient(fullyQualifiedNamespace: sbEndpoint, new DefaultAzureCredential());
 });
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
