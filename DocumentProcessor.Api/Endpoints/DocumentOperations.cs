@@ -178,6 +178,8 @@ public class DocumentOperations
     public async Task<IActionResult> DownloadDocument(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "documents/{id}/download")] HttpRequest req, string id)
     {
+        _logger.LogInformation("Processing a document download request...");
+
         var user = req.HttpContext.User;
         string? userId = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("oid");
 
@@ -204,5 +206,60 @@ public class DocumentOperations
             _logger.LogError($"Cryptographic SAS generation pipeline failure: {ex.Message}");
             return new StatusCodeResult(StatusCodes.Status500InternalServerError);
         }
+    }
+
+    [Function(nameof(DeleteDocument))]
+    public async Task<IActionResult> DeleteDocument(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "delete", Route = "documents/{id}")] HttpRequest req, string id)
+    {
+        _logger.LogInformation("Processing a document record deletion request...");
+
+        var user = req.HttpContext.User;
+        string? userId = user.FindFirstValue(ClaimTypes.NameIdentifier) ?? user.FindFirstValue("oid");
+
+        if (string.IsNullOrEmpty(userId))
+            return new UnauthorizedResult();
+
+        string? eTag = req.Headers["If-Match"];
+
+        if (string.IsNullOrEmpty(eTag))
+            return new BadRequestObjectResult("'If-Match' property is missing from the HTTP headers.");
+
+        try
+        {
+            BlobClient blobClient = _blobContainerClient.GetBlobClient(id);
+            var storageResponse = await blobClient.DeleteIfExistsAsync();
+
+            if(storageResponse.Value is false)
+                _logger.LogWarning($"Blob {id} does not exist in the storage. Proceeding the database cleanup.");
+
+            ItemRequestOptions options = new()
+            {
+                IfMatchEtag = eTag
+            };
+
+            ItemResponse<DocumentModel> databaseResponse = await _container.DeleteItemAsync<DocumentModel>(
+                id: id,
+                partitionKey: new PartitionKey(userId),
+                options);
+
+            _logger.LogInformation($"Record for the document with ID: {id} has been successfully deleted.");
+            return new NoContentResult();
+        }
+        catch(CosmosException ex) when (ex.StatusCode is HttpStatusCode.NotFound)
+        {
+            _logger.LogError($"Particular document hasn't found in the database: {ex.Message}");
+            return new StatusCodeResult(StatusCodes.Status404NotFound);
+        }
+        catch(CosmosException ex) when (ex.StatusCode is HttpStatusCode.PreconditionFailed)
+        {
+            _logger.LogError($"Precondition failed. ETag mismatch: {ex.Message}");
+            return new StatusCodeResult(StatusCodes.Status412PreconditionFailed);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Document record deletion tracking failure encountered: {ex.Message}");
+            return new StatusCodeResult(StatusCodes.Status500InternalServerError);
+        } 
     }
 }
