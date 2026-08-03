@@ -85,7 +85,7 @@ public class StatusChangeTrigger
 
             _logger.LogInformation($"Document {blobName} is successfully patched. Request Charge: {statusResponse.RequestCharge} RUs.");
         }
-        catch(CosmosException ex) when (ex.StatusCode is HttpStatusCode.NotFound)
+        catch(CosmosException ex) when (ex.StatusCode is HttpStatusCode.PreconditionFailed)
         {
             _logger.LogError($"Blob: {blobName} wasn't in the 'UploadPending' state.");
             return;
