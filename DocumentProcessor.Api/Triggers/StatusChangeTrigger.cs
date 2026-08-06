@@ -1,5 +1,6 @@
 using Azure.Messaging.EventGrid;
 using Azure.Messaging.EventGrid.SystemEvents;
+using Azure.Messaging.ServiceBus;
 using Azure.Storage.Blobs;
 using DocumentProcessor.Core.Enums;
 using DocumentProcessor.Core.Models;
@@ -17,17 +18,21 @@ public class StatusChangeTrigger
     private readonly ILogger<StatusChangeTrigger> _logger;
     private readonly Container _container;
     private readonly BlobContainerClient _blobContainerClient;
+    private readonly ServiceBusClient _serviceBusClient;
 
     public StatusChangeTrigger(
         ILogger<StatusChangeTrigger> logger,
         [FromKeyedServices(CosmosContainerKey.Documents)] Container container,
-        [FromKeyedServices(BlobContainerKey.docs)] BlobContainerClient blobContainerClient)
+        [FromKeyedServices(BlobContainerKey.docs)] BlobContainerClient blobContainerClient,
+        ServiceBusClient serviceBusClient)
     {
         _logger = logger;
         _container = container;
         _blobContainerClient = blobContainerClient;
+        _serviceBusClient = serviceBusClient;
     }
 
+    // Create a subscription to listen the blob storage
     [Function(nameof(StatusChangeTrigger))]
     public async Task Run([EventGridTrigger] EventGridEvent egEvent)
     {
@@ -84,6 +89,20 @@ public class StatusChangeTrigger
                 requestOptions);
 
             _logger.LogInformation($"Document {blobName} is successfully patched. Request Charge: {statusResponse.RequestCharge} RUs.");
+
+            var jsonBody = new
+            {
+                documentId = blobName,
+                userId = userId
+            };
+            string jsonPayload = JsonSerializer.Serialize(jsonBody);
+
+            await using var sender = _serviceBusClient.CreateSender("document-processing");
+            var message = new ServiceBusMessage(jsonPayload);
+
+            await sender.SendMessageAsync(message);
+
+            _logger.LogInformation("Successfully sent the JSON payload to the 'document-processing' queue.");
         }
         catch(CosmosException ex) when (ex.StatusCode is HttpStatusCode.PreconditionFailed)
         {

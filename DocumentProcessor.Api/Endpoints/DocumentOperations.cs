@@ -123,7 +123,7 @@ public class DocumentOperations
 
         try
         {
-            FeedIterator<DocumentModel> feedIterator = _container.GetItemQueryIterator<DocumentModel>(
+            using FeedIterator<DocumentModel> feedIterator = _container.GetItemQueryIterator<DocumentModel>(
             queryDefinition: queryDefinition,
             requestOptions: queryOptions);
 
