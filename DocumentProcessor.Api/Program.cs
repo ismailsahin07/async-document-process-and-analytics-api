@@ -9,6 +9,10 @@ using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Identity.Web;
+using Polly;
+using Polly.CircuitBreaker;
+using Polly.Retry;
+using System.Net;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 
@@ -58,6 +62,37 @@ builder.Services.AddSingleton<ServiceBusClient>(sp =>
         ?? throw new InvalidOperationException("Service Bus endpoint is missing.");
 
     return new ServiceBusClient(fullyQualifiedNamespace: sbEndpoint, new DefaultAzureCredential());
+});
+
+builder.Services.AddHttpClient("AzureFoundryClient", client =>
+{
+    
+})
+.AddResilienceHandler("HttpResiliencePipeline", builder =>
+{
+    builder.AddRetry(new RetryStrategyOptions<HttpResponseMessage>()
+    {
+        ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+            .Handle<HttpRequestException>()
+            .HandleResult(response =>
+                (int)response.StatusCode >= 500 ||
+                    response.StatusCode is HttpStatusCode.RequestTimeout),
+        MaxRetryAttempts = 3,
+        Delay = TimeSpan.FromMilliseconds(500),
+        BackoffType = DelayBackoffType.Exponential
+    });
+
+    builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions<HttpResponseMessage>()
+    {
+        ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+            .Handle<HttpRequestException>()
+            .HandleResult(response =>
+                (int)response.StatusCode >= 500 ||
+                    response.StatusCode is HttpStatusCode.RequestTimeout),
+        FailureRatio = 0.5,
+        SamplingDuration = TimeSpan.FromSeconds(30),
+        BreakDuration = TimeSpan.FromSeconds(15)
+    });
 });
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
